@@ -25,6 +25,16 @@ import (
 	"golang.org/x/tools/go/packages/packagestest"
 )
 
+// TestMain restricts the exporters to GOPATH on windows for the sealed build:
+// the Modules subtests flake there under Go 1.12 (a different subtest fails
+// each run and the underlying go list errors are swallowed).
+func TestMain(m *testing.M) {
+	if runtime.GOOS == "windows" {
+		packagestest.All = []packagestest.Exporter{packagestest.GOPATH}
+	}
+	os.Exit(m.Run())
+}
+
 // TODO(matloob): remove this once Go 1.12 is released as we will end support
 // for versions of go list before Go 1.10.4.
 var usesOldGolist = false
@@ -803,7 +813,8 @@ func testParseFileModifyAST(t *testing.T, exporter packagestest.Exporter) {
 	}
 	initial, err := packages.Load(exported.Config, "golang.org/fake/a")
 	if err != nil {
-		t.Error(err)
+		// Fatal, not Error: initial is nil on error and initial[0] would panic.
+		t.Fatal(err)
 	}
 
 	// Check value of a.A has been set to "b"

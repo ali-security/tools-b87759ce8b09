@@ -6,6 +6,7 @@ package packages_test
 
 import (
 	"bytes"
+	"go/build"
 	"io/ioutil"
 	"path/filepath"
 	"runtime"
@@ -77,6 +78,15 @@ func TestCgoOption(t *testing.T) {
 	// if !build.Default.CgoEnabled {
 	// 	return
 	// }
+
+	// Sealed build: restore the two guards above for the CI legs that hit
+	// them (windows has no net.cgoLookupHost; macOS runs with CGO_ENABLED=0).
+	if runtime.GOOS == "windows" {
+		t.Skipf("no cgo or incomplete std lib on %s", runtime.GOOS)
+	}
+	if !build.Default.CgoEnabled {
+		t.Skip("cgo is disabled")
+	}
 
 	// Test that we can load cgo-using packages with
 	// DisableCgo=true/false, which, among other things, causes go

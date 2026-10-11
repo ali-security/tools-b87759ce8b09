@@ -75,6 +75,11 @@ func TestTags(t *testing.T) {
 		}
 
 	}
+	// Sealed build: with GO111MODULE=on, loading "." in a temp dir with no
+	// go.mod finds 0 packages, so give the temp dir its own module.
+	if err := ioutil.WriteFile(filepath.Join(dir, "go.mod"), []byte("module tag\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
 	// Run stringer in the directory that contains the package files.
 	// We cannot run stringer in the current directory for the following reasons:
 	// - Versions of Go earlier than Go 1.11, do not support absolute directories as a pattern.

@@ -1,0 +1,169 @@
+name: seal-build
+
+# Sealed build of golang.org/x/tools v0.0.0-20190226205152-f727befe758c.
+# Upstream has no GitHub Actions CI (x/tools is tested on the Go build
+# dashboard), so this workflow is authored from scratch:
+#   module-zip - packs the module zip with golang.org/x/mod/zip, the same
+#                packer the Go module proxy uses.
+#   test       - builds and runs the full test suite on Go 1.12 (the Go
+#                release contemporary with this Feb-2019 snapshot) on linux,
+#                windows and macOS.
+
+on:
+  workflow_dispatch:
+    inputs:
+      test-filter:
+        description: "go test package/flag selector; empty runs the full suite"
+        type: string
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  module-zip:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      MODULE_PATH: golang.org/x/tools
+      MODULE_VERSION: v0.0.0-20190226205152-f727befe758c
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.24"
+          cache: false
+
+      - name: Build x/mod zip helper (outside the source tree)
+        run: |
+          set -euxo pipefail
+          HELPER="$RUNNER_TEMP/helper"
+          mkdir -p "$HELPER"
+          cp "$GITHUB_WORKSPACE/.github/create_mod.go" "$HELPER/"
+          cd "$HELPER"
+          go mod init example.com/create_mod
+          go get golang.org/x/mod@v0.24.0
+          go build -o "$RUNNER_TEMP/create_mod" .
+
+      - name: Stage module tree (without .git and .github)
+        run: |
+          set -euxo pipefail
+          STAGE="$RUNNER_TEMP/zipsrc"
+          mkdir -p "$STAGE"
+          tar -c --exclude=.git --exclude=.github -C "$GITHUB_WORKSPACE" . | tar -x -C "$STAGE"
+          test ! -e "$STAGE/.git"
+          test ! -e "$STAGE/.github"
+          test -f "$STAGE/go.mod"
+          test -f "$STAGE/.gitignore"
+          test -f "$STAGE/.gitattributes"
+
+      - name: Create module zip
+        run: |
+          set -euxo pipefail
+          mkdir -p "$RUNNER_TEMP/out"
+          ZIP="$RUNNER_TEMP/out/$MODULE_VERSION.zip"
+          "$RUNNER_TEMP/create_mod" "$MODULE_PATH" "$MODULE_VERSION" "$RUNNER_TEMP/zipsrc" "$ZIP"
+          ENTRIES=$(unzip -Z1 "$ZIP" | wc -l)
+          echo "zip entries: $ENTRIES"
+          # 1005 = entry count of the public proxy zip for this version.
+          test "$ENTRIES" -eq 1005
+          if unzip -Z1 "$ZIP" | grep -F "/.github/"; then
+            echo "::error::.github must not ship in the module zip"
+            exit 1
+          fi
+          sha256sum "$ZIP"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: module-zip
+          path: ${{ runner.temp }}/out/v0.0.0-20190226205152-f727befe758c.zip
+          if-no-files-found: error
+
+  test:
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-14]
+        go-version: ["1.12.17"]
+    env:
+      GOPROXY: https://proxy.golang.org
+      GO111MODULE: "on"
+      # macOS: Go 1.12 cgo cannot parse current Xcode clang DWARF
+      # ("malformed DWARF TagVariable entry"), so build pure Go there.
+      CGO_ENABLED: ${{ matrix.os == 'macos-14' && '0' || '1' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Keep LF line endings
+        run: git config --global core.autocrlf false
+
+      - uses: actions/checkout@v4
+
+      # macos-14 is arm64 and Go 1.12 has no darwin/arm64 port: run the x64
+      # toolchain under Rosetta.
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go-version }}
+          architecture: x64
+          cache: false
+
+      - name: Windows - mingw 8.1.0 for Go 1.12 cgo and short temp dir
+        if: runner.os == 'Windows'
+        run: |
+          set -euxo pipefail
+          # The runner's gcc (UCRT) lacks __imp___iob_func, which Go 1.12's
+          # runtime/cgo needs.
+          choco install mingw --version 8.1.0 --allow-downgrade -y --no-progress
+          test -f "C:/ProgramData/chocolatey/lib/mingw/tools/install/mingw64/bin/gcc.exe"
+          echo 'C:\ProgramData\chocolatey\lib\mingw\tools\install\mingw64\bin' >> "$GITHUB_PATH"
+          echo "TEMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+          echo "TMP=$RUNNER_TEMP" >> "$GITHUB_ENV"
+
+      - name: Toolchain info
+        run: |
+          set -euxo pipefail
+          go version
+          go env
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            gcc --version | grep -F 8.1.0
+          fi
+
+      - name: Build
+        run: |
+          set -euxo pipefail
+          go mod download
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # cmd/splitdwarf is !windows apart from doc.go: no main package to link.
+            go build $(go list ./... | grep -v '/cmd/splitdwarf$')
+          else
+            go build ./...
+          fi
+
+      - name: Test
+        run: |
+          set -euxo pipefail
+          go test -p 1 -v ${{ inputs.test-filter || './...' }} 2>&1 | tee test.log
+
+      - name: Test summary
+        if: ${{ !cancelled() }}
+        run: |
+          set -euo pipefail
+          awk '
+            /^ok[ \t]/              { ok++ }
+            /^FAIL[ \t]/            { pkgfail++ }
+            /^[ \t]*--- PASS:/      { pass++ }
+            /^[ \t]*--- FAIL:/      { fail++ }
+            /^[ \t]*--- SKIP:/      { skip++ }
+            END {
+              printf "TEST SUMMARY (%s): packages ok=%d FAIL=%d; tests PASS=%d FAIL=%d SKIP=%d\n",
+                ENVIRON["RUNNER_OS"], ok, pkgfail, pass, fail, skip
+            }
+          ' test.log

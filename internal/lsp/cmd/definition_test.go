@@ -33,7 +33,8 @@ func TestDefinitionHelpExample(t *testing.T) {
 	}
 	thisFile := filepath.Join(dir, "definition.go")
 	args := []string{"query", "definition", fmt.Sprintf("%v:#%v", thisFile, cmd.ExampleOffset)}
-	expect := regexp.MustCompile(`^[\w/\\:_]+flag[/\\]flag.go:\d+:\d+,\d+:\d+: defined here as type flag.FlagSet struct{.*}$`)
+	// '.' added to the path class: setup-go's GOROOT contains dots (e.g. go/1.12.17/x64).
+	expect := regexp.MustCompile(`^[\w/\\:_.]+flag[/\\]flag.go:\d+:\d+,\d+:\d+: defined here as type flag.FlagSet struct{.*}$`)
 	got := captureStdOut(t, func() {
 		tool.Main(context.Background(), &cmd.Application{}, args)
 	})
