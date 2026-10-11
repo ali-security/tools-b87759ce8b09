@@ -27,7 +27,6 @@ import (
 type Serve struct {
 	Logfile string `flag:"logfile" help:"filename to log to. if value is \"auto\", then logging to a default output file is enabled"`
 	Mode    string `flag:"mode" help:"no effect"`
-	Port    int    `flag:"port" help:"port on which to run gopls for debugging purposes"`
 	Address string `flag:"listen" help:"address on which to listen for remote connections"`
 
 	app *Application
@@ -120,11 +119,13 @@ func (s *Serve) Run(ctx context.Context, args ...string) error {
 	}
 	// For debugging purposes only.
 	if s.Address != "" {
+		// -listen=address
+		if strings.HasPrefix(s.Address, ":") {
+			return fmt.Errorf("-listen=%s implicitly binds all network interfaces; please use an explicit host such as 0.0.0.0 (all interfaces) or localhost (safer)", s.Address)
+		}
 		return lsp.RunServerOnAddress(ctx, s.Address, logger)
 	}
-	if s.Port != 0 {
-		return lsp.RunServerOnPort(ctx, s.Port, logger)
-	}
+	// communicate over stdin/stdout
 	stream := jsonrpc2.NewHeaderStream(os.Stdin, os.Stdout)
 	return lsp.RunServer(ctx, stream, logger)
 }

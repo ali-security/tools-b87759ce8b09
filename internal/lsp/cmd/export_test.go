@@ -5,3 +5,9 @@
 package cmd
 
 const ExampleOffset = exampleOffset
+
+// NewServe returns a Serve command bound to app, as Application.Run would
+// set it up, so that tests can invoke Serve.Run directly.
+func NewServe(app *Application) *Serve {
+	return &Serve{app: app}
+}

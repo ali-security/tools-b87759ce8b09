@@ -13,10 +13,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/tools/go/packages/packagestest"
 	"golang.org/x/tools/internal/lsp/cmd"
@@ -139,6 +141,74 @@ func TestDefinition(t *testing.T) {
 	}
 	if count == 0 {
 		t.Fatalf("No tests were run")
+	}
+}
+
+// flagNames returns the command line flags tool.Main would register for a
+// value of type typ, walking exported untagged struct fields recursively.
+func flagNames(typ reflect.Type) []string {
+	var names []string
+	for i := 0; i < typ.NumField(); i++ {
+		field := typ.Field(i)
+		if field.PkgPath != "" {
+			continue // unexported
+		}
+		if name, ok := field.Tag.Lookup("flag"); ok {
+			names = append(names, name)
+		} else if field.Type.Kind() == reflect.Struct {
+			names = append(names, flagNames(field.Type)...)
+		}
+	}
+	return names
+}
+
+// TestServeNoPortFlag checks that gopls no longer offers a -port flag, which
+// started the LSP server on ":port", i.e. on all network interfaces.
+func TestServeNoPortFlag(t *testing.T) {
+	for _, v := range []interface{}{cmd.Serve{}, cmd.Application{}} {
+		typ := reflect.TypeOf(v)
+		for _, name := range flagNames(typ) {
+			if name == "port" {
+				t.Errorf("%v registers a -port flag, which listens on all network interfaces", typ)
+			}
+		}
+	}
+}
+
+// TestServeListenImplicitAllInterfaces checks that -listen rejects an address
+// with no host (e.g. ":0"), which would implicitly bind the LSP server to all
+// network interfaces, rather than starting the server.
+func TestServeListenImplicitAllInterfaces(t *testing.T) {
+	s := cmd.NewServe(&cmd.Application{})
+	s.Address = ":0"
+	errc := make(chan error, 1)
+	go func() { errc <- s.Run(context.Background()) }()
+	select {
+	case err := <-errc:
+		if err == nil || !strings.Contains(err.Error(), "implicitly binds all network interfaces") {
+			t.Errorf("Serve.Run with -listen=%s: got error %v, want rejection of implicit all-interfaces address", s.Address, err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatalf("Serve.Run with -listen=%s did not return: server is listening on all network interfaces", s.Address)
+	}
+}
+
+// TestServeListenExplicitHost checks that -listen with an explicit host is
+// not rejected by the all-interfaces check.
+func TestServeListenExplicitHost(t *testing.T) {
+	s := cmd.NewServe(&cmd.Application{})
+	s.Address = "localhost:0"
+	errc := make(chan error, 1)
+	// The server does not return once listening; it is torn down with the
+	// test binary.
+	go func() { errc <- s.Run(context.Background()) }()
+	select {
+	case err := <-errc:
+		if err != nil && strings.Contains(err.Error(), "implicitly binds all network interfaces") {
+			t.Errorf("Serve.Run with -listen=%s: unexpectedly rejected: %v", s.Address, err)
+		}
+	case <-time.After(1 * time.Second):
+		// Listening as expected.
 	}
 }
 

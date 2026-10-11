@@ -7,7 +7,6 @@ package lsp
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -30,12 +29,6 @@ func RunServer(ctx context.Context, stream jsonrpc2.Stream, opts ...interface{})
 	conn, client := protocol.RunServer(ctx, stream, s, opts...)
 	s.client = client
 	return conn.Wait(ctx)
-}
-
-// RunServerOnPort starts an LSP server on the given port and does not exit.
-// This function exists for debugging purposes.
-func RunServerOnPort(ctx context.Context, port int, opts ...interface{}) error {
-	return RunServerOnAddress(ctx, fmt.Sprintf(":%v", port))
 }
 
 // RunServerOnPort starts an LSP server on the given port and does not exit.
